@@ -59,20 +59,20 @@ class Models():
         
         if detect_mode=='Retinaface':
             if not self.retinaface_model:
-                self.retinaface_model = onnxruntime.InferenceSession('.\models\det_10g.onnx', providers=self.providers)
+                self.retinaface_model = onnxruntime.InferenceSession('./models/det_10g.onnx', providers=self.providers)
                 
             kpss = self.detect_retinaface(img, max_num=max_num, score=score)
 
         elif detect_mode=='SCRDF':
             if not self.scrdf_model:
-                self.scrdf_model = onnxruntime.InferenceSession('.\models\scrfd_2.5g_bnkps.onnx', providers=self.providers)
+                self.scrdf_model = onnxruntime.InferenceSession('./models/scrfd_2.5g_bnkps.onnx', providers=self.providers)
                 
             kpss = self.detect_scrdf(img, max_num=max_num, score=score)
             
         
         elif detect_mode=='Yolov8':
             if not self.yoloface_model:
-                self.yoloface_model = onnxruntime.InferenceSession('.\models\yoloface_8n.onnx', providers=self.providers)
+                self.yoloface_model = onnxruntime.InferenceSession('./models/yoloface_8n.onnx', providers=self.providers)
                 self.insight106_model = onnxruntime.InferenceSession('./models/2d106det.onnx', providers=self.providers)
             # kpss = self.detect_yoloface2(img, max_num=max_num, score=score)
             kpss = self.detect_retinaface(img, max_num=max_num, score=score)
@@ -105,7 +105,7 @@ class Models():
             
     def run_recognize(self, img, kps):
         if not self.recognition_model:
-            self.recognition_model = onnxruntime.InferenceSession('.\models\w600k_r50.onnx', providers=self.providers)
+            self.recognition_model = onnxruntime.InferenceSession('./models/w600k_r50.onnx', providers=self.providers)
         
         embedding, cropped_image = self.recognize(img, kps)
         return embedding, cropped_image
@@ -113,7 +113,7 @@ class Models():
 
     def calc_swapper_latent(self, source_embedding):
         if not self.swapper_model:
-            graph = onnx.load("./models/inswapper_128.fp16.onnx").graph
+            graph = onnx.load("./models/inswapper_128.onnx").graph
             self.emap = onnx.numpy_helper.to_array(graph.initializer[-1])
         
         n_e = source_embedding / l2norm(source_embedding)
@@ -130,7 +130,7 @@ class Models():
             
             # self.swapper_model = onnxruntime.InferenceSession( "./models/inswapper_128_last_cubic.onnx", sess_options, providers=[('CUDAExecutionProvider', cuda_options), 'CPUExecutionProvider'])
             
-            self.swapper_model = onnxruntime.InferenceSession( "./models/inswapper_128.fp16.onnx", providers=self.providers)
+            self.swapper_model = onnxruntime.InferenceSession( "./models/inswapper_128.onnx", providers=self.providers)
 
         io_binding = self.swapper_model.io_binding()
         io_binding.bind_input(name='target', device_type='cuda', device_id=0, element_type=np.float32, shape=(1,3,128,128), buffer_ptr=image.data_ptr())
