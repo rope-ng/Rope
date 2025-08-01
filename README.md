@@ -45,7 +45,7 @@ python -m pip install -r requirements.txt
 
 ### 2. Download Models
 
-Download all models from [https://github.com/rope-ng/Rope/releases/tag/Diamond](https://github.com/rope-ng/Rope/releases/tag/Diamond) and place them into the `models/` folder.
+Download all models from [https://github.com/rope-ng/Rope/releases/tag/v1.0.0](https://github.com/rope-ng/Rope/releases/tag/v1.0.0) and place them into the `models/` folder.
 
 ## Usage
 
