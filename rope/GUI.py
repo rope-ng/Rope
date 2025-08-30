@@ -970,13 +970,13 @@ class GUI(tk.Tk):
                     img = cv2.imread(file)
 
                     if img is not None:
-                        img = torch.from_numpy(img.astype('uint8')).to('cuda')
+                        img = torch.from_numpy(img.astype('uint8')).to(self.models.device)
 
                         pad_scale = 0.2
                         padded_width = int(img.size()[1]*(1.+pad_scale))
                         padded_height = int(img.size()[0]*(1.+pad_scale))
 
-                        padding = torch.zeros((padded_height, padded_width, 3), dtype=torch.uint8, device='cuda:0')
+                        padding = torch.zeros((padded_height, padded_width, 3), dtype=torch.uint8, device=self.models.device)
 
                         width_start = int(img.size()[1]*pad_scale/2)
                         width_end = width_start+int(img.size()[1])
@@ -1017,11 +1017,11 @@ class GUI(tk.Tk):
                         print('Bad file', file)
 
 
-        torch.cuda.empty_cache()
-
+        if self.models.device.startswith('cuda'):
+            torch.cuda.empty_cache()
     def find_faces(self):
         try:
-            img = torch.from_numpy(self.video_image).to('cuda')
+            img = torch.from_numpy(self.video_image).to(self.models.device)
             img = img.permute(2,0,1)
             kpss = self.models.run_detect(img, max_num=50)
 
@@ -1838,8 +1838,8 @@ class GUI(tk.Tk):
         self.widget['SwapFacesButton'].set(False)
 
         self.models.delete_models()
-        torch.cuda.empty_cache()
-
+        if self.models.device.startswith('cuda'):
+            torch.cuda.empty_cache()
         
         
 # Refactor this, doesn't seem very efficient        
