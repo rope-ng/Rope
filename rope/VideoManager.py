@@ -21,14 +21,12 @@ onnxruntime.set_default_logger_severity(4)
 
 import inspect #print(inspect.currentframe().f_back.f_code.co_name, 'resize_image')
 
-device = 'cuda'
-
 lock=threading.Lock()
 
 class VideoManager():  
     def __init__(self, models ):
         self.models = models
-        # Model related
+        self.device = models.device        # Model related
         self.swapper_model = []             # insightface swapper model
         # self.faceapp_model = []             # insight faceapp model
         self.input_names = []               # names of the inswapper.onnx inputs
@@ -314,7 +312,8 @@ class VideoManager():
             if self.control['AudioButton']:    
                 self.audio_sp.terminate()
 
-            torch.cuda.empty_cache()
+            if self.device.startswith('cuda'):
+                torch.cuda.empty_cache()
                 
         elif command=='stop_from_gui':
             self.play = False
@@ -327,8 +326,8 @@ class VideoManager():
             if self.control['AudioButton']:    
                 self.audio_sp.terminate()
 
-            torch.cuda.empty_cache()
-
+            if self.device.startswith('cuda'):
+                torch.cuda.empty_cache()
         elif command == "record":
             self.record = True
             self.play = True
@@ -521,7 +520,7 @@ class VideoManager():
             parameters = self.markers[idx-1]['parameters'].copy()
         
         # Load frame into VRAM
-        img = torch.from_numpy(target_image.astype('uint8')).to('cuda') #HxWxc
+        img = torch.from_numpy(target_image.astype('uint8')).to(self.device) #HxWxc
         img = img.permute(2,0,1)#cxHxW        
         
         #Scale up frame if it is smaller than 512
@@ -654,7 +653,7 @@ class VideoManager():
         original_face_256 = t256(original_face_512)
         original_face_128 = t128(original_face_256)          
 
-        latent = torch.from_numpy(self.models.calc_swapper_latent(s_e)).float().to('cuda')
+        latent = torch.from_numpy(self.models.calc_swapper_latent(s_e)).float().to(self.device)
 
         dim = 1
         if parameters['SwapperTypeTextSel'] == '128':
@@ -676,7 +675,7 @@ class VideoManager():
             itex = ceil(parameters['StrengthSlider'] / 100.)
 
         output_size = int(128 * dim)
-        output = torch.zeros((output_size, output_size, 3), dtype=torch.float32, device='cuda')
+        output = torch.zeros((output_size, output_size, 3), dtype=torch.float32, device=self.device)
         input_face_affined = input_face_affined.permute(1, 2, 0)
         input_face_affined = torch.div(input_face_affined, 255.0)
 
@@ -687,7 +686,7 @@ class VideoManager():
                     input_face_disc = input_face_disc.permute(2, 0, 1)
                     input_face_disc = torch.unsqueeze(input_face_disc, 0).contiguous()
 
-                    swapper_output = torch.empty((1,3,128,128), dtype=torch.float32, device='cuda').contiguous()
+                    swapper_output = torch.empty((1,3,128,128), dtype=torch.float32, device=self.device).contiguous()
                     self.models.run_swapper(input_face_disc, latent, swapper_output)
 
                     swapper_output = torch.squeeze(swapper_output)
@@ -742,13 +741,13 @@ class VideoManager():
             swap = torch.squeeze(swap)
             swap = swap.permute(1, 2, 0).type(torch.float32)
 
-            del_color = torch.tensor([parameters['ColorRedSlider'], parameters['ColorGreenSlider'], parameters['ColorBlueSlider']], device=device)
+            del_color = torch.tensor([parameters['ColorRedSlider'], parameters['ColorGreenSlider'], parameters['ColorBlueSlider']], device=self.device)
             swap += del_color
             swap = torch.clamp(swap, min=0., max=255.)
             swap = swap.permute(2, 0, 1).type(torch.uint8)        
 
         # Create border mask
-        border_mask = torch.ones((128, 128), dtype=torch.float32, device=device)
+        border_mask = torch.ones((128, 128), dtype=torch.float32, device=self.device)
         border_mask = torch.unsqueeze(border_mask,0)
         
         # if parameters['BorderState']:
@@ -766,7 +765,7 @@ class VideoManager():
         border_mask = gauss(border_mask)        
 
         # Create image mask
-        swap_mask = torch.ones((128, 128), dtype=torch.float32, device=device)
+        swap_mask = torch.ones((128, 128), dtype=torch.float32, device=self.device)
         swap_mask = torch.unsqueeze(swap_mask,0)    
 
         # Face Diffing
@@ -799,7 +798,7 @@ class VideoManager():
             with lock:
                 mask = self.func_w_test('CLIP', self.apply_CLIPs, original_face_512, parameters["CLIPTextEntry"], parameters["CLIPSlider"])
             mask = cv2.resize(mask, (128,128))
-            mask = torch.from_numpy(mask).to('cuda')
+            mask = torch.from_numpy(mask).to(self.device)
             swap_mask *= mask
 
 
@@ -883,7 +882,7 @@ class VideoManager():
     def apply_occlusion(self, img, amount):        
         img = torch.div(img, 255)
         img = torch.unsqueeze(img, 0)
-        outpred = torch.ones((256,256), dtype=torch.float32, device=device).contiguous()
+        outpred = torch.ones((256,256), dtype=torch.float32, device=self.device).contiguous()
         
         self.models.run_occluder(img, outpred)        
                 
@@ -892,12 +891,11 @@ class VideoManager():
         outpred = torch.unsqueeze(outpred, 0).type(torch.float32)
         
         if amount >0:                   
-            kernel = torch.ones((1,1,3,3), dtype=torch.float32, device=device)
-
-            for i in range(int(amount)):
-                outpred = torch.nn.functional.conv2d(outpred, kernel, padding=(1, 1))       
-                outpred = torch.clamp(outpred, 0, 1)
-            
+            kernel = torch.ones((1,1,3,3), dtype=torch.float32, device=self.device)
+            outpred = torch.unsqueeze(outpred, 0)
+            outpred = torch.unsqueeze(outpred, 0)
+            outpred = F.conv2d(outpred, kernel, padding=1)
+            outpred = torch.squeeze(outpred)
             outpred = torch.squeeze(outpred)
             
         if amount <0:      
@@ -950,141 +948,35 @@ class VideoManager():
 
         # atts = [1 'skin', 2 'l_brow', 3 'r_brow', 4 'l_eye', 5 'r_eye', 6 'eye_g', 7 'l_ear', 8 'r_ear', 9 'ear_r', 10 'nose', 11 'mouth', 12 'u_lip', 13 'l_lip', 14 'neck', 15 'neck_l', 16 'cloth', 17 'hair', 18 'hat']
        
-        outpred = torch.ones((512,512), dtype=torch.float32, device='cuda').contiguous()
-        
+        outpred = torch.ones((512,512), dtype=torch.float32, device=self.device).contiguous()        
 
         img = torch.div(img, 255)
         img = v2.functional.normalize(img, (0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         img = torch.reshape(img, (1, 3, 512, 512))
-        outpred = torch.empty((1,19,512,512), dtype=torch.float32, device='cuda').contiguous()
-
-        self.models.run_faceparser(img, outpred)
-
-        outpred = torch.squeeze(outpred)
-        outpred = torch.argmax(outpred, 0)
-
-        # Mouth Parse
-        if MouthAmount <0:
-            mouth_idxs = torch.tensor([11], device='cuda')
-            iters = int(-MouthAmount)
-
-            mouth_parse = torch.isin(outpred, mouth_idxs)
-            mouth_parse = torch.clamp(~mouth_parse, 0, 1).type(torch.float32)
-            mouth_parse = torch.reshape(mouth_parse, (1, 1, 512, 512))
-            mouth_parse = torch.neg(mouth_parse)
-            mouth_parse = torch.add(mouth_parse, 1)
-
-            kernel = torch.ones((1, 1, 3, 3), dtype=torch.float32,
-                                device='cuda')
-
-            for i in range(iters):
-                mouth_parse = torch.nn.functional.conv2d(mouth_parse, kernel,
-                                                         padding=(1, 1))
-                mouth_parse = torch.clamp(mouth_parse, 0, 1)
-
-            mouth_parse = torch.squeeze(mouth_parse)
-            mouth_parse = torch.neg(mouth_parse)
-            mouth_parse = torch.add(mouth_parse, 1)
-            mouth_parse = torch.reshape(mouth_parse, (1, 512, 512))
-
-        elif MouthAmount >0:
-            mouth_idxs = torch.tensor([11,12,13], device='cuda')
-            iters = int(MouthAmount)
-
-            mouth_parse = torch.isin(outpred, mouth_idxs)
-            mouth_parse = torch.clamp(~mouth_parse, 0, 1).type(torch.float32)
-            mouth_parse = torch.reshape(mouth_parse, (1,1,512,512))
-            mouth_parse = torch.neg(mouth_parse)
-            mouth_parse = torch.add(mouth_parse, 1)
-
-            kernel = torch.ones((1,1,3,3), dtype=torch.float32, device='cuda')
-
-            for i in range(iters):
-                mouth_parse = torch.nn.functional.conv2d(mouth_parse, kernel, padding=(1, 1))
-                mouth_parse = torch.clamp(mouth_parse, 0, 1)
-
-            mouth_parse = torch.squeeze(mouth_parse)
-            mouth_parse = torch.neg(mouth_parse)
-            mouth_parse = torch.add(mouth_parse, 1)
-            mouth_parse = torch.reshape(mouth_parse, (1, 512, 512))
-
-        else:
-            mouth_parse = torch.ones((1, 512, 512), dtype=torch.float32, device='cuda')
-
-        # BG Parse
-        bg_idxs = torch.tensor([0, 14, 15, 16, 17, 18], device=device)
-        bg_parse = torch.isin(outpred, bg_idxs)
-        bg_parse = torch.clamp(~bg_parse, 0, 1).type(torch.float32)
-        bg_parse = torch.reshape(bg_parse, (1, 1, 512, 512))
-
-        if FaceAmount > 0:
-            kernel = torch.ones((1, 1, 3, 3), dtype=torch.float32, device=device)
-
-            for i in range(int(FaceAmount)):
-                bg_parse = torch.nn.functional.conv2d(bg_parse, kernel, padding=(1, 1))
-                bg_parse = torch.clamp(bg_parse, 0, 1)
-
-            bg_parse = torch.squeeze(bg_parse)
-
-        elif FaceAmount < 0:
-            bg_parse = torch.neg(bg_parse)
-            bg_parse = torch.add(bg_parse, 1)
-
-            kernel = torch.ones((1, 1, 3, 3), dtype=torch.float32, device=device)
-
-            for i in range(int(-FaceAmount)):
-                bg_parse = torch.nn.functional.conv2d(bg_parse, kernel, padding=(1, 1))
-                bg_parse = torch.clamp(bg_parse, 0, 1)
-
-            bg_parse = torch.squeeze(bg_parse)
-            bg_parse = torch.neg(bg_parse)
-            bg_parse = torch.add(bg_parse, 1)
-            bg_parse = torch.reshape(bg_parse, (1, 512, 512))
-        else:
-            bg_parse = torch.ones((1,512,512), dtype=torch.float32, device='cuda')
-
-        out_parse = torch.mul(bg_parse, mouth_parse)
-
-        return out_parse
-
-    def apply_bg_face_parser(self, img, FaceParserAmount):
-
-        # atts = [1 'skin', 2 'l_brow', 3 'r_brow', 4 'l_eye', 5 'r_eye', 6 'eye_g', 7 'l_ear', 8 'r_ear', 9 'ear_r', 10 'nose', 11 'mouth', 12 'u_lip', 13 'l_lip', 14 'neck', 15 'neck_l', 16 'cloth', 17 'hair', 18 'hat']
-        # out = np.ones((512, 512), dtype=np.float32)  
         
-        outpred = torch.ones((512,512), dtype=torch.float32, device='cuda').contiguous()
+        outpred = torch.ones((512,512), dtype=torch.float32, device=self.device).contiguous()
 
         # turn mouth parser off at 0 so someone can just use the mouth parser
         if FaceParserAmount != 0:
             img = torch.div(img, 255)
             img = v2.functional.normalize(img, (0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
             img = torch.reshape(img, (1, 3, 512, 512))      
-            outpred = torch.empty((1,19,512,512), dtype=torch.float32, device=device).contiguous()
+            outpred = torch.empty((1,19,512,512), dtype=torch.float32, device=self.device).contiguous()
 
             self.models.run_faceparser(img, outpred)
 
             outpred = torch.squeeze(outpred)
             outpred = torch.argmax(outpred, 0)
 
-            test = torch.tensor([ 0, 14, 15, 16, 17, 18], device=device)
+            test = torch.tensor([ 0, 14, 15, 16, 17, 18], device=self.device)
             outpred = torch.isin(outpred, test)
             outpred = torch.clamp(~outpred, 0, 1).type(torch.float32)
             outpred = torch.reshape(outpred, (1,1,512,512))
             
-            if FaceParserAmount >0:                   
-                kernel = torch.ones((1,1,3,3), dtype=torch.float32, device=device)
-
-                for i in range(int(FaceParserAmount)):
-                    outpred = torch.nn.functional.conv2d(outpred, kernel, padding=(1, 1))
-                    outpred = torch.clamp(outpred, 0, 1)
+            if FaceParserAmount >0:
+                outpred = torch.reshape(outpred, (1,1,512,512))
                 
-                outpred = torch.squeeze(outpred)
-                
-            if FaceParserAmount <0:      
-                outpred = torch.neg(outpred)
-                outpred = torch.add(outpred, 1)
-
-                kernel = torch.ones((1,1,3,3), dtype=torch.float32, device=device)
+                kernel = torch.ones((1,1,3,3), dtype=torch.float32, device=self.device)
 
                 for i in range(int(-FaceParserAmount)):
                     outpred = torch.nn.functional.conv2d(outpred, kernel, padding=(1, 1))
@@ -1132,7 +1024,7 @@ class VideoManager():
         temp = torch.unsqueeze(temp, 0).contiguous()
 
         # Bindings
-        outpred = torch.empty((1,3,512,512), dtype=torch.float32, device=device).contiguous()
+        outpred = torch.empty((1,3,512,512), dtype=torch.float32, device=self.device).contiguous()
 
         if parameters['RestorerTypeTextSel'] == 'GFPGAN':
             self.models.run_GFPGAN(temp, outpred)            
@@ -1141,7 +1033,7 @@ class VideoManager():
             self.models.run_codeformer(temp, outpred) 
             
         elif parameters['RestorerTypeTextSel'] == 'GPEN256':
-            outpred = torch.empty((1,3,256,256), dtype=torch.float32, device=device).contiguous()
+            outpred = torch.empty((1,3,256,256), dtype=torch.float32, device=self.device).contiguous()
             self.models.run_GPEN_256(temp, outpred) 
             
         elif parameters['RestorerTypeTextSel'] == 'GPEN512':
