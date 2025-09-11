@@ -1,5 +1,3 @@
-import os
-import cv2
 import base64
 import numpy as np
 from PIL import Image
@@ -10,7 +8,6 @@ import torchvision
 torchvision.disable_beta_transforms_warning()
 from torchvision.transforms import v2
 from math import ceil
-import onnxruntime
 
 from rope.Models import Models
 
@@ -92,6 +89,9 @@ class FaceSwapProcessor:
             if img.ndim == 3 and img.shape[2] == 3:
                 img = img.permute(2, 0, 1)
         
+        if isinstance(target_kps, torch.Tensor):
+            target_kps = target_kps.detach().cpu().numpy()
+        
         dst = self.arcface_dst * 4.0
         dst[:,0] += 32.0
         
@@ -115,7 +115,7 @@ class FaceSwapProcessor:
         rotation_deg = float(tform.rotation * 57.2958)
         translation = [float(tform.translation[0]), float(tform.translation[1])]
         scale_val = float(tform.scale)
-        original_face_512 = v2.functional.affine(img, rotation_deg, translation, scale_val, [0], center=[0, 0], interpolation=v2.InterpolationMode.BILINEAR)
+        original_face_512 = v2.functional.affine(img, rotation_deg, translation, scale_val, [0.0], center=[0.0, 0.0], interpolation=v2.InterpolationMode.BILINEAR)
         original_face_512 = v2.functional.crop(original_face_512, 0, 0, 512, 512)
         original_face_256 = t256(original_face_512)
         original_face_128 = t128(original_face_256)
@@ -137,7 +137,7 @@ class FaceSwapProcessor:
         if parameters.get('FaceAdjSwitch', False):
             scale_factor = 1 + parameters.get('FaceScaleSlider', 0) / 100
             center_val = [float(dim*128-1), float(dim*128-1)]
-            input_face_affined = v2.functional.affine(input_face_affined, 0, [0.0, 0.0], scale_factor, [0], center=center_val, interpolation=v2.InterpolationMode.BILINEAR)
+            input_face_affined = v2.functional.affine(input_face_affined, 0.0, [0.0, 0.0], scale_factor, [0.0], center=center_val, interpolation=v2.InterpolationMode.BILINEAR)
         
         itex = 1
         if parameters.get('StrengthSwitch', False):
@@ -189,32 +189,93 @@ class FaceSwapProcessor:
     
     def blend_face_back(self, original_img, swapped_face, tform):
         """Blend the swapped face back into the original image"""
-        # Convert to tensors if needed
         if isinstance(original_img, np.ndarray):
             original_img = torch.from_numpy(original_img).float().to(self.device)
             if original_img.ndim == 3 and original_img.shape[2] == 3:
                 original_img = original_img.permute(2, 0, 1)
         
+        # Create a result image that's a clone of the original
+        result = original_img.clone()
+        
+        # Create a mask for blending
+        swap_mask = torch.ones((512, 512), dtype=torch.float32, device=self.device)
+        swap_mask = torch.unsqueeze(swap_mask, 0)
+        
+        # Calculate the area to be merged back to the original frame
         inv_tform = trans.SimilarityTransform()
         inv_tform.params = np.linalg.inv(tform.params)
         
-        inv_rotation = -float(tform.rotation * 57.2958)
-        inv_translation = [-float(tform.translation[0]/tform.scale), -float(tform.translation[1]/tform.scale)]
-        inv_scale = float(1/tform.scale)
+        IM512 = inv_tform.params[0:2, :]
+        corners = np.array([[0,0], [0,511], [511, 0], [511, 511]])
+        
+        x = (IM512[0][0]*corners[:,0] + IM512[0][1]*corners[:,1] + IM512[0][2])
+        y = (IM512[1][0]*corners[:,0] + IM512[1][1]*corners[:,1] + IM512[1][2])
+        
+        from math import floor, ceil
+        
+        left = floor(np.min(x))
+        if left < 0:
+            left = 0
+        top = floor(np.min(y))
+        if top < 0:
+            top = 0
+        right = ceil(np.max(x))
+        if right > result.shape[2]:
+            right = result.shape[2]
+        bottom = ceil(np.max(y))
+        if bottom > result.shape[1]:
+            bottom = result.shape[1]
+        
+        # Untransform the swap (position it correctly in the original image)
+        inv_rotation = float(inv_tform.rotation * 57.2958)
+        inv_translation = [float(inv_tform.translation[0]), float(inv_tform.translation[1])]
+        inv_scale = float(inv_tform.scale)
+        
+        # Pad the swapped face to the size of the original image
+        swapped_face_padded = v2.functional.pad(swapped_face, (0, 0, result.shape[2]-512, result.shape[1]-512))
+        
+        # Apply the inverse transformation to position the face correctly
         swapped_face_positioned = v2.functional.affine(
-            swapped_face, 
-            inv_rotation, 
-            inv_translation, 
-            inv_scale, 
-            [0], 
-            center=[0, 0], 
+            swapped_face_padded,
+            inv_rotation,
+            inv_translation,
+            inv_scale,
+            [0.0],
+            center=[0.0, 0.0],
             interpolation=v2.InterpolationMode.BILINEAR
         )
         
-        result = original_img.clone()
-        h, w = swapped_face_positioned.shape[1], swapped_face_positioned.shape[2]
-        if h <= result.shape[1] and w <= result.shape[2]:
-            result[:, :h, :w] = swapped_face_positioned
+        # Crop to the area where the face should be
+        swapped_face_crop = swapped_face_positioned[0:3, top:bottom, left:right]
+        swapped_face_crop = swapped_face_crop.permute(1, 2, 0)
+        
+        # Do the same for the mask
+        swap_mask_padded = v2.functional.pad(swap_mask, (0, 0, result.shape[2]-512, result.shape[1]-512))
+        swap_mask_positioned = v2.functional.affine(
+            swap_mask_padded,
+            inv_rotation,
+            inv_translation,
+            inv_scale,
+            [0.0],
+            center=[0.0, 0.0],
+            interpolation=v2.InterpolationMode.BILINEAR
+        )
+        swap_mask_crop = swap_mask_positioned[0:1, top:bottom, left:right]
+        swap_mask_crop = swap_mask_crop.permute(1, 2, 0)
+        swap_mask_crop = torch.sub(1, swap_mask_crop)
+        
+        # Apply the mask to the original image in the face area
+        img_crop = result[0:3, top:bottom, left:right]
+        img_crop = img_crop.permute(1, 2, 0)
+        img_crop = torch.mul(swap_mask_crop, img_crop)
+        
+        # Add the cropped areas and place them back into the original image
+        swapped_face_crop = torch.add(swapped_face_crop, img_crop)
+        swapped_face_crop = swapped_face_crop.type(torch.uint8)
+        swapped_face_crop = swapped_face_crop.permute(2, 0, 1)
+        
+        # Place the blended face back into the original image
+        result[0:3, top:bottom, left:right] = swapped_face_crop
         
         return result
     
@@ -232,7 +293,7 @@ class FaceSwapProcessor:
                     if len(embeddings) > 0:
                         source_embeddings.append(embeddings[0])
             
-            if not source_embeddings:
+            if len(source_embeddings) == 0:
                 return {
                     "status": "error",
                     "message": "No faces detected in source images",
@@ -241,7 +302,7 @@ class FaceSwapProcessor:
             
             target_faces = self.detect_faces(input_img)
             
-            if not target_faces:
+            if len(target_faces) == 0:
                 return {
                     "status": "error", 
                     "message": "No faces detected in input image",
@@ -256,7 +317,8 @@ class FaceSwapProcessor:
             
             for target_kps in target_faces:
                 swapped_face, tform = self.swap_face_core(input_tensor, target_kps, source_embedding, parameters)
-                result_img = swapped_face
+                # Blend the swapped face back into the original image instead of just returning the face
+                result_img = self.blend_face_back(input_tensor, swapped_face, tform)
                 break
             
             result_b64 = self.image_to_base64(result_img)

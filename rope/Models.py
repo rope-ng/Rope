@@ -299,6 +299,10 @@ class Models():
     
         
     def detect_retinaface(self, img, max_num, score):
+        # Convert numpy array to PyTorch tensor if needed
+        if isinstance(img, np.ndarray):
+            img = torch.from_numpy(img).float().to(self.device)
+            img = img.permute(2, 0, 1)  # HWC to CHW
 
         # Resize image to fit within the input_size
         input_size = (640, 640)
@@ -470,6 +474,10 @@ class Models():
         return kpss
 
     def detect_retinaface2(self, img, max_num, score):
+        # Convert numpy array to PyTorch tensor if needed
+        if isinstance(img, np.ndarray):
+            img = torch.from_numpy(img).float().to(self.device)
+            img = img.permute(2, 0, 1)  # HWC to CHW
 
         # Resize image to fit within the input_size
         input_size = (640, 640)
@@ -1128,6 +1136,12 @@ class Models():
         #
         # return np.array(result)
     def recognize(self, img, face_kps):
+        # Convert numpy array to tensor if needed
+        if isinstance(img, np.ndarray):
+            img = torch.from_numpy(img).float().to(self.device)
+            if len(img.shape) == 3:
+                img = img.permute(2, 0, 1)  # HWC to CHW
+        
         # Find transform
         dst = self.arcface_dst.copy()
         dst[:, 0] += 8.0
@@ -1136,7 +1150,7 @@ class Models():
         tform.estimate(face_kps, dst)
 
         # Transform
-        img = v2.functional.affine(img, tform.rotation*57.2958, (tform.translation[0], tform.translation[1]) , tform.scale, 0, center = (0,0) ) 
+        img = v2.functional.affine(img, float(tform.rotation)*57.2958, [float(tform.translation[0]), float(tform.translation[1])], float(tform.scale), [0.0], center = [0.0, 0.0] )
         img = v2.functional.crop(img, 0,0, 128, 128)
 
         img = v2.Resize((112, 112), interpolation=v2.InterpolationMode.BILINEAR, antialias=False)(img)
