@@ -12,3 +12,4 @@ torchaudio==2.7.1
 tqdm
 ftfy
 regex==2025.7.34
+flask
