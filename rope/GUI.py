@@ -1267,7 +1267,7 @@ class GUI(tk.Tk):
                 self.target_media_buttons[i].bind("<MouseWheel>", self.target_videos_mouse_wheel)
                 self.target_media_canvas.create_window((i%2)*delx, (i//2)*dely, window = self.target_media_buttons[i], anchor='nw')
 
-            self.target_media_canvas.configure(scrollregion = self.target_media_canvas.bbox("all"))
+            self.static_widget['input_videos_scrollbar'].resize_scrollbar(None)
 
         elif self.widget['PreviewModeTextSel'].get()=='Video':#videos
 
